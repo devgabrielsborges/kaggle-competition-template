@@ -68,3 +68,8 @@ class ModelPort(ABC):
             TaskType.MULTICLASS_CLASSIFICATION: "accuracy",
         }
         return scoring_map[config.task_type]
+
+    def get_default_trials(self) -> int:
+        """Return recommended number of trials based on search space complexity."""
+        # Default for complex models
+        return 100

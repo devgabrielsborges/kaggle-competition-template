@@ -53,3 +53,7 @@ class GradientBoostingAdapter(ModelPort):
 
     def get_model(self) -> GradientBoostingRegressor:
         return self._model
+
+    def get_default_trials(self) -> int:
+        """Gradient Boosting has 6 continuous/integer parameters."""
+        return 150

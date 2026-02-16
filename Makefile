@@ -16,7 +16,9 @@ help:
 	@echo "    make ui         - Start MLflow UI"
 	@echo ""
 	@echo "  Training:"
-	@echo "    make train MODEL=xgboost TASK=regression TRIALS=100"
+	@echo "    make train MODEL=xgboost TASK=regression TRIALS=auto"
+	@echo "    make train MODEL=ridge SUBMIT=true"
+	@echo "    make train MODEL=linear TRIALS=20"
 	@echo ""
 	@echo "  Data:"
 	@echo "    make dvc-push   - Push data to MinIO remote storage"
@@ -82,12 +84,20 @@ ui:
 
 MODEL ?= xgboost
 TASK ?= regression
-TRIALS ?= 100
+TRIALS ?= auto
 CV_FOLDS ?= 5
+SUBMIT ?= false
 
 train:
-	@echo "Training $(MODEL) ($(TASK), $(TRIALS) trials)..."
-	uv run python -m src.cli --model $(MODEL) --task $(TASK) --trials $(TRIALS) --cv-folds $(CV_FOLDS)
+	@echo "Training $(MODEL) ($(TASK), trials=$(TRIALS))..."
+	@echo "Configuring MinIO/S3 access..."
+	AWS_ACCESS_KEY_ID=minioadmin \
+	AWS_SECRET_ACCESS_KEY=minioadmin \
+	MLFLOW_S3_ENDPOINT_URL=http://localhost:9000 \
+	uv run python -m src.cli --model $(MODEL) --task $(TASK) \
+	$(if $(filter-out auto,$(TRIALS)),--trials $(TRIALS),) \
+	$(if $(filter true,$(SUBMIT)),--generate-submission,) \
+	--cv-folds $(CV_FOLDS)
 
 # -- Data --
 

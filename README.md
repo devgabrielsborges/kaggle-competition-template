@@ -57,25 +57,48 @@ Place competition data in `data/raw/`, then preprocess:
 ### 3. Train Models
 
 ```bash
-# Train with defaults (xgboost, regression, 100 trials)
-make train
+# Train with auto-optimized trials based on model complexity
+make train MODEL=xgboost
 
-# Train specific models
-make train MODEL=ridge TASK=regression TRIALS=200
-make train MODEL=xgboost TASK=regression TRIALS=300
-make train MODEL=pytorch TASK=binary_classification TRIALS=50
-make train MODEL=tensorflow TASK=multiclass_classification TRIALS=50
+# Train with custom trial count
+make train MODEL=ridge TRIALS=50
+
+# Train and generate submission file
+make train MODEL=xgboost SUBMIT=true
+
+# Train with all options
+make train MODEL=gradient_boosting TASK=regression TRIALS=200 CV_FOLDS=10 SUBMIT=true
 ```
+
+**Model-Specific Default Trials** (automatically set when `TRIALS=auto` or omitted):
+- `linear`: 10 trials (simple model, 2×2 parameter combinations)
+- `ridge`: 50 trials (moderate search space)
+- `svm`: 50 trials (medium complexity)
+- `random_forest`: 100 trials (large search space)
+- `gradient_boosting`: 150 trials (6 continuous/integer parameters)
+- `xgboost`: 200 trials (9 hyperparameters, very large space)
+- `pytorch`: 150 trials (dynamic architecture space)
+- `tensorflow`: 150 trials (dynamic architecture space)
 
 Available models: `linear`, `ridge`, `random_forest`, `gradient_boosting`, `svm`, `xgboost`, `pytorch`, `tensorflow`
 
 Available tasks: `regression`, `binary_classification`, `multiclass_classification`
 
-### 4. View Results
+### 4. View Results & Artifacts
+
+All artifacts (models, submission files, trial logs) are automatically stored in MinIO (S3-compatible storage).
 
 ```bash
-make ui         # Open http://localhost:5000
+make ui         # Open MLflow UI at http://localhost:5000
 ```
+
+Access MinIO Console: http://localhost:9001 (minioadmin/minioadmin)
+
+**What's stored in MinIO:**
+- Trained model artifacts (`s3://mlflow-artifacts/`)
+- Submission CSV files (when `SUBMIT=true`)
+- Optuna trial logs (`optuna_trials.csv`)
+- Model input examples for validation
 
 ### 5. Data Versioning
 
@@ -102,5 +125,40 @@ make dvc-status # Check DVC status
 
 - **Experiment Tracking**: MLflow (PostgreSQL backend + MinIO artifacts)
 - **Data Versioning**: DVC (MinIO remote storage)
-- **Hyperparameter Optimization**: Optuna
+- **Hyperparameter Optimization**: Optuna (model-specific trial optimization)
 - **Infrastructure**: Docker Compose (PostgreSQL + MinIO)
+
+## Environment Configuration
+
+All configuration is centralized in `src/infrastructure/config/settings.py` with environment variable overrides.
+
+Copy `.env.example` to `.env` and customize if needed:
+```bash
+cp .env.example .env
+```
+
+**Key Environment Variables:**
+- `MLFLOW_S3_ENDPOINT_URL`: MinIO endpoint (default: `http://localhost:9000`)
+- `AWS_ACCESS_KEY_ID`: MinIO access key (default: `minioadmin`)
+- `AWS_SECRET_ACCESS_KEY`: MinIO secret key (default: `minioadmin`)
+- `MLFLOW_ARTIFACT_LOCATION`: S3 bucket for artifacts (default: `s3://mlflow-artifacts/`)
+
+The `make train` command automatically sets these variables for proper MinIO integration.
+
+## Troubleshooting
+
+**Issue: "No such file or directory" when training**
+- Ensure Docker containers are running: `make status`
+- Check MinIO is accessible: `curl http://localhost:9000/minio/health/live`
+
+**Issue: Artifacts not appearing in MLflow UI**
+- Verify environment variables are set correctly when running `make ui`
+- Check MinIO console at http://localhost:9001 to verify bucket exists
+
+**Issue: "Connection refused" to PostgreSQL**
+- Wait for containers to fully start: `docker compose logs -f`
+- Check PostgreSQL is ready: `docker exec mlflow-postgres pg_isready -U mlflow`
+
+**Issue: Submission file not generated**
+- Ensure `data/raw/train.csv` and `data/raw/test.csv` exist
+- Use `SUBMIT=true` flag: `make train MODEL=xgboost SUBMIT=true`

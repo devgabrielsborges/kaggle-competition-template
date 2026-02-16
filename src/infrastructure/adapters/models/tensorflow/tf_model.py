@@ -142,3 +142,7 @@ class TensorFlowAdapter(ModelPort):
 
     def get_model(self) -> Any:
         return self._model
+
+    def get_default_trials(self) -> int:
+        """TensorFlow NN has dynamic architecture space similar to PyTorch."""
+        return 150

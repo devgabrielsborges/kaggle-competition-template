@@ -45,3 +45,7 @@ class SVMAdapter(ModelPort):
 
     def get_model(self) -> SVR:
         return self._model
+
+    def get_default_trials(self) -> int:
+        """SVM has medium complexity: C × 3 kernels × 2 gamma × epsilon."""
+        return 50

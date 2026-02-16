@@ -162,3 +162,10 @@ class PyTorchAdapter(ModelPort):
 
     def get_model(self) -> Any:
         return self._model
+
+    def get_default_trials(self) -> int:
+        """
+        PyTorch NN has dynamic architecture space
+        (n_layers × hidden_dims) + other params.
+        """
+        return 150

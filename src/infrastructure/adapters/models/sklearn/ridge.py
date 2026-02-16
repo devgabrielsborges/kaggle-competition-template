@@ -43,3 +43,7 @@ class RidgeAdapter(ModelPort):
 
     def get_model(self) -> Ridge:
         return self._model
+
+    def get_default_trials(self) -> int:
+        """Ridge has moderate search space: alpha (continuous) × 5 solvers × max_iter."""
+        return 50

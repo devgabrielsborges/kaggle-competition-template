@@ -65,3 +65,7 @@ class XGBoostAdapter(ModelPort):
 
     def get_model(self):
         return self._model
+
+    def get_default_trials(self) -> int:
+        """XGBoost has 9 hyperparameters with very large search space."""
+        return 200

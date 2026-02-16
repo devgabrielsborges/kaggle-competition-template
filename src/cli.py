@@ -87,14 +87,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--trials",
         type=int,
-        default=100,
-        help="Number of Optuna trials (default: 100)",
+        default=None,
+        help="Number of Optuna trials (default: auto-set based on model complexity)",
     )
     parser.add_argument(
         "--cv-folds",
         type=int,
         default=5,
         help="Number of cross-validation folds (default: 5)",
+    )
+    parser.add_argument(
+        "--generate-submission",
+        action="store_true",
+        help="Generate submission file after training",
     )
     return parser.parse_args()
 
@@ -116,6 +121,12 @@ def main():
     # Create model adapter
     model_adapter = MODEL_REGISTRY[args.model](task_type)
 
+    # Determine number of trials - use model-specific default if not specified
+    if args.trials is not None:
+        n_trials = args.trials
+    else:
+        n_trials = model_adapter.get_default_trials()
+
     # Load data
     loader = CsvDataLoader(
         raw_dir=settings.raw_data_dir,
@@ -134,7 +145,7 @@ def main():
         experiment_name=(f"{settings.competition_name} - {model_adapter.name}"),
         model_name=model_adapter.name,
         task_type=task_type,
-        n_trials=args.trials,
+        n_trials=n_trials,
         cv_folds=args.cv_folds,
         random_state=settings.random_state,
     )
@@ -145,9 +156,39 @@ def main():
 
     print("=" * 60)
     print(f"  {settings.competition_name.upper()} - {model_adapter.name}")
+    print(f"  Trials: {n_trials} (model-optimized)")
     print("=" * 60)
 
-    model, study, metrics = service.run(dataset)
+    # Load raw data if submission is requested
+    test_df = None
+    train_df = None
+    if args.generate_submission:
+        import os
+
+        import pandas as pd
+
+        train_path = os.path.join(settings.raw_data_dir, "train.csv")
+        test_path = os.path.join(settings.raw_data_dir, "test.csv")
+
+        if os.path.exists(test_path) and os.path.exists(train_path):
+            train_df = pd.read_csv(train_path)
+            test_df = pd.read_csv(test_path)
+            print("✓ Loaded raw data for submission generation")
+        else:
+            print(
+                f"⚠️  Test data not found at {test_path}, "
+                "submission will not be generated"
+            )
+            args.generate_submission = False
+
+    # Run training (with optional submission generation)
+    model, study, metrics = service.run(
+        dataset=dataset,
+        generate_submission=args.generate_submission,
+        test_df=test_df,
+        train_df=train_df,
+        settings=settings,
+    )
 
     print("\n" + "=" * 60)
     print("  TRAINING COMPLETED SUCCESSFULLY")

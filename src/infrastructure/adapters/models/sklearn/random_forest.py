@@ -46,3 +46,7 @@ class RandomForestAdapter(ModelPort):
 
     def get_model(self) -> RandomForestRegressor:
         return self._model
+
+    def get_default_trials(self) -> int:
+        """Random Forest has large search space with 5 hyperparameters."""
+        return 100

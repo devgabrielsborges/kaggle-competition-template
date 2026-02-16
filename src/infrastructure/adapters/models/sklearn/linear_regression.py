@@ -49,3 +49,7 @@ class LinearRegressionAdapter(ModelPort):
 
     def get_model(self) -> LinearRegression:
         return self._model
+
+    def get_default_trials(self) -> int:
+        """Linear regression has only 2×2=4 parameter combinations."""
+        return 10
