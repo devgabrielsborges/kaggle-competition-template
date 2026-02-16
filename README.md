@@ -66,9 +66,22 @@ make train MODEL=ridge TRIALS=50
 # Train and generate submission file
 make train MODEL=xgboost SUBMIT=true
 
+# Train ALL models and generate submissions for each
+make train-all TASK=regression
+
+# Train all models with custom trials
+make train-all TASK=regression TRIALS=100
+
 # Train with all options
 make train MODEL=gradient_boosting TASK=regression TRIALS=200 CV_FOLDS=10 SUBMIT=true
 ```
+
+**Train-All Feature:**
+`make train-all` trains all registered models sequentially and generates a submission file for each model's best trial:
+- Output files: `submission_linear.csv`, `submission_ridge.csv`, `submission_xgboost.csv`, etc.
+- Each model uses its optimized trial count by default
+- Provides a summary comparing all models' performance
+- All submissions are logged to MLflow and stored in MinIO
 
 **Model-Specific Default Trials** (automatically set when `TRIALS=auto` or omitted):
 - `linear`: 10 trials (simple model, 2×2 parameter combinations)

@@ -2,9 +2,13 @@
 CLI entry point — trains a model with Optuna + MLflow.
 
 Usage:
+    # Train a single model
     uv run python -m src.cli --model xgboost --trials 100
-    uv run python -m src.cli --model ridge --trials 200
-    uv run python -m src.cli --model pytorch --trials 50
+    uv run python -m src.cli --model ridge --trials 200 --generate-submission
+
+    # Train all models
+    uv run python -m src.cli --train-all --task regression
+    uv run python -m src.cli --model all --task regression --trials 50
 """
 
 import argparse
@@ -25,8 +29,12 @@ def _register_models():
 
     # sklearn models (always available)
     from src.infrastructure.adapters.models.sklearn import (
-        GradientBoostingAdapter, LinearRegressionAdapter, RandomForestAdapter,
-        RidgeAdapter, SVMAdapter)
+        GradientBoostingAdapter,
+        LinearRegressionAdapter,
+        RandomForestAdapter,
+        RidgeAdapter,
+        SVMAdapter,
+    )
 
     MODEL_REGISTRY["linear"] = lambda _task: LinearRegressionAdapter()
     MODEL_REGISTRY["ridge"] = lambda _task: RidgeAdapter()
@@ -52,8 +60,7 @@ def _register_models():
 
     # TensorFlow
     try:
-        from src.infrastructure.adapters.models.tensorflow import \
-            TensorFlowAdapter
+        from src.infrastructure.adapters.models.tensorflow import TensorFlowAdapter
 
         MODEL_REGISTRY["tensorflow"] = lambda task: TensorFlowAdapter(
             task_type=task,
@@ -70,8 +77,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        required=True,
-        help=("Model to train (e.g., linear, ridge, xgboost, pytorch)"),
+        required=False,
+        default=None,
+        help=("Model to train (e.g., linear, ridge, xgboost, pytorch, all)"),
+    )
+    parser.add_argument(
+        "--train-all",
+        action="store_true",
+        help="Train all available models",
     )
     parser.add_argument(
         "--task",
@@ -104,28 +117,172 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def train_single_model(
+    model_name: str,
+    task_type: TaskType,
+    n_trials: int | None,
+    cv_folds: int,
+    generate_submission: bool,
+    settings: Settings,
+    dataset: Dataset,
+    test_df=None,
+    train_df=None,
+) -> tuple:
+    """Train a single model and optionally generate submission."""
+    model_adapter = MODEL_REGISTRY[model_name](task_type)
+
+    # Determine number of trials
+    if n_trials is not None:
+        trials = n_trials
+    else:
+        trials = model_adapter.get_default_trials()
+
+    # Configure experiment
+    config = ExperimentConfig(
+        experiment_name=(f"{settings.competition_name} - {model_adapter.name}"),
+        model_name=model_adapter.name,
+        task_type=task_type,
+        n_trials=trials,
+        cv_folds=cv_folds,
+        random_state=settings.random_state,
+    )
+
+    # Train
+    tracker = MLflowTracker(settings)
+    service = TrainingService(model_adapter, tracker, config)
+
+    print("\n" + "=" * 60)
+    print(f"  {settings.competition_name.upper()} - {model_adapter.name}")
+    print(f"  Trials: {trials} (model-optimized)")
+    print("=" * 60)
+
+    # Run training with model-specific submission file
+    model, study, metrics = service.run(
+        dataset=dataset,
+        generate_submission=generate_submission,
+        test_df=test_df,
+        train_df=train_df,
+        settings=settings,
+        submission_filename=f"submission_{model_name}.csv",
+    )
+
+    return model, study, metrics
+
+
+def train_all_models(
+    task_type: TaskType,
+    n_trials: int | None,
+    cv_folds: int,
+    settings: Settings,
+    dataset: Dataset,
+    test_df=None,
+    train_df=None,
+) -> dict:
+    """Train all registered models and generate submissions for each."""
+    import os
+
+    import pandas as pd
+
+    results = {}
+
+    # Check if test data exists for submission generation
+    train_path = os.path.join(settings.raw_data_dir, "train.csv")
+    test_path = os.path.join(settings.raw_data_dir, "test.csv")
+
+    if os.path.exists(test_path) and os.path.exists(train_path):
+        if test_df is None or train_df is None:
+            train_df = pd.read_csv(train_path)
+            test_df = pd.read_csv(test_path)
+        generate_submission = True
+        print("✓ Test data found - submissions will be generated for all models")
+    else:
+        generate_submission = False
+        print(
+            f"⚠️  Test data not found at {test_path} - no submissions will be generated"
+        )
+
+    print("\n" + "=" * 60)
+    print(f"  TRAINING ALL MODELS ({len(MODEL_REGISTRY)} total)")
+    print("=" * 60)
+
+    for i, model_name in enumerate(sorted(MODEL_REGISTRY.keys()), 1):
+        print(f"\n[{i}/{len(MODEL_REGISTRY)}] Training {model_name}...")
+        try:
+            model, study, metrics = train_single_model(
+                model_name=model_name,
+                task_type=task_type,
+                n_trials=n_trials,
+                cv_folds=cv_folds,
+                generate_submission=generate_submission,
+                settings=settings,
+                dataset=dataset,
+                test_df=test_df,
+                train_df=train_df,
+            )
+            results[model_name] = {
+                "model": model,
+                "study": study,
+                "metrics": metrics,
+                "success": True,
+            }
+            print(f"✓ {model_name} completed successfully")
+        except Exception as e:
+            print(f"✗ {model_name} failed: {e}")
+            results[model_name] = {"success": False, "error": str(e)}
+
+    # Print summary
+    print("\n" + "=" * 60)
+    print("  TRAINING SUMMARY")
+    print("=" * 60)
+
+    successful = [name for name, res in results.items() if res["success"]]
+    failed = [name for name, res in results.items() if not res["success"]]
+
+    print(f"\n✓ Successful: {len(successful)}/{len(MODEL_REGISTRY)}")
+    if successful:
+        for model_name in successful:
+            metrics = results[model_name]["metrics"]
+            metric_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+            print(f"  - {model_name}: {metric_str}")
+
+    if failed:
+        print(f"\n✗ Failed: {len(failed)}/{len(MODEL_REGISTRY)}")
+        for model_name in failed:
+            print(f"  - {model_name}: {results[model_name]['error']}")
+
+    if generate_submission:
+        print("\n📝 Submission files generated:")
+        for model_name in successful:
+            print(f"  - submission_{model_name}.csv")
+
+    return results
+
+
 def main():
     args = parse_args()
 
     _register_models()
 
-    if args.model not in MODEL_REGISTRY:
-        available = ", ".join(sorted(MODEL_REGISTRY.keys()))
-        print(f"✗ Unknown model: '{args.model}'")
-        print(f"  Available models: {available}")
+    # Determine if training all models
+    if args.train_all or (args.model and args.model.lower() == "all"):
+        train_all = True
+        model_name = None
+    elif args.model:
+        train_all = False
+        model_name = args.model
+        if model_name not in MODEL_REGISTRY:
+            available = ", ".join(sorted(MODEL_REGISTRY.keys()))
+            print(f"✗ Unknown model: '{model_name}'")
+            print(f"  Available models: {available}")
+            return
+    else:
+        print("✗ Error: Either --model or --train-all must be specified")
+        print("  Use --model <model_name> to train a specific model")
+        print("  Use --train-all to train all available models")
         return
 
     settings = Settings()
     task_type = TaskType(args.task)
-
-    # Create model adapter
-    model_adapter = MODEL_REGISTRY[args.model](task_type)
-
-    # Determine number of trials - use model-specific default if not specified
-    if args.trials is not None:
-        n_trials = args.trials
-    else:
-        n_trials = model_adapter.get_default_trials()
 
     # Load data
     loader = CsvDataLoader(
@@ -140,29 +297,10 @@ def main():
         y_test=y_test,
     )
 
-    # Configure experiment
-    config = ExperimentConfig(
-        experiment_name=(f"{settings.competition_name} - {model_adapter.name}"),
-        model_name=model_adapter.name,
-        task_type=task_type,
-        n_trials=n_trials,
-        cv_folds=args.cv_folds,
-        random_state=settings.random_state,
-    )
-
-    # Train
-    tracker = MLflowTracker(settings)
-    service = TrainingService(model_adapter, tracker, config)
-
-    print("=" * 60)
-    print(f"  {settings.competition_name.upper()} - {model_adapter.name}")
-    print(f"  Trials: {n_trials} (model-optimized)")
-    print("=" * 60)
-
     # Load raw data if submission is requested
     test_df = None
     train_df = None
-    if args.generate_submission:
+    if args.generate_submission or train_all:
         import os
 
         import pandas as pd
@@ -173,26 +311,46 @@ def main():
         if os.path.exists(test_path) and os.path.exists(train_path):
             train_df = pd.read_csv(train_path)
             test_df = pd.read_csv(test_path)
-            print("✓ Loaded raw data for submission generation")
-        else:
+            if not train_all:
+                print("✓ Loaded raw data for submission generation")
+        elif args.generate_submission:
             print(
                 f"⚠️  Test data not found at {test_path}, "
                 "submission will not be generated"
             )
             args.generate_submission = False
 
-    # Run training (with optional submission generation)
-    model, study, metrics = service.run(
-        dataset=dataset,
-        generate_submission=args.generate_submission,
-        test_df=test_df,
-        train_df=train_df,
-        settings=settings,
-    )
+    # Train all models or single model
+    if train_all:
+        train_all_models(
+            task_type=task_type,
+            n_trials=args.trials,
+            cv_folds=args.cv_folds,
+            settings=settings,
+            dataset=dataset,
+            test_df=test_df,
+            train_df=train_df,
+        )
+        print("\n" + "=" * 60)
+        print("  ALL MODELS TRAINING COMPLETED")
+        print("=" * 60)
+    else:
+        # Single model training
+        model, study, metrics = train_single_model(
+            model_name=model_name,
+            task_type=task_type,
+            n_trials=args.trials,
+            cv_folds=args.cv_folds,
+            generate_submission=args.generate_submission,
+            settings=settings,
+            dataset=dataset,
+            test_df=test_df,
+            train_df=train_df,
+        )
 
-    print("\n" + "=" * 60)
-    print("  TRAINING COMPLETED SUCCESSFULLY")
-    print("=" * 60)
+        print("\n" + "=" * 60)
+        print("  TRAINING COMPLETED SUCCESSFULLY")
+        print("=" * 60)
 
 
 if __name__ == "__main__":

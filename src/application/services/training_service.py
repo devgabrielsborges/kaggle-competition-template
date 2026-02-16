@@ -31,6 +31,7 @@ class TrainingService:
         test_df=None,
         train_df=None,
         settings=None,
+        submission_filename: str = "submission.csv",
     ) -> tuple[ModelPort, optuna.Study, dict]:
         """
         Execute the full training pipeline:
@@ -45,6 +46,7 @@ class TrainingService:
             test_df: Raw test dataframe for submission generation.
             train_df: Raw training dataframe for submission generation.
             settings: Settings object with configuration.
+            submission_filename: Name for the submission file (default: submission.csv).
 
         Returns:
             Tuple of (trained model adapter, study, metrics dict).
@@ -84,16 +86,20 @@ class TrainingService:
 
             # Generate submission if requested
             if generate_submission and test_df is not None and train_df is not None:
-                self._generate_and_log_submission(test_df, train_df, settings)
+                self._generate_and_log_submission(
+                    test_df, train_df, settings, submission_filename
+                )
 
             return self.model_adapter, study, metrics
 
-    def _generate_and_log_submission(self, test_df, train_df, settings) -> None:
+    def _generate_and_log_submission(
+        self, test_df, train_df, settings, submission_filename: str = "submission.csv"
+    ) -> None:
         """Generate submission file and log it as an artifact."""
-        from src.application.services.submission_service import \
-            SubmissionService
-        from src.infrastructure.adapters.preprocessors.sklearn_preprocessor import \
-            SklearnPreprocessor
+        from src.application.services.submission_service import SubmissionService
+        from src.infrastructure.adapters.preprocessors.sklearn_preprocessor import (
+            SklearnPreprocessor,
+        )
 
         print("\n" + "=" * 60)
         print("  GENERATING SUBMISSION FILE")
@@ -112,17 +118,18 @@ class TrainingService:
             target_col=settings.target_col,
         )
 
-        submission_path = "submission.csv"
         submission_service.generate(
             test_df=test_df,
             train_df=train_df,
-            output_path=submission_path,
+            output_path=submission_filename,
         )
 
         # Log to MLflow (will be stored in MinIO)
         print("📦 Uploading submission to MinIO via MLflow...")
-        self.tracker.log_artifact(submission_path)
-        print("✓ Submission file logged to MLflow and stored in MinIO")
+        self.tracker.log_artifact(submission_filename)
+        print(
+            f"✓ Submission '{submission_filename}' logged to MLflow and stored in MinIO"
+        )
 
     def _log_results(
         self,
